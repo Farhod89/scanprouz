@@ -296,3 +296,19 @@ img { display: block; }
   .floating-actions { gap: 10px; right: 14px; }
   .fab { width: 62px; height: 62px; }
 }
+
+.notice {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #dbeafe;
+  color: #1e3a8a;
+  border: 1px solid #bfdbfe;
+}
+@media (max-width: 900px) {
+  .pages-layout { grid-template-columns: 1fr; }
+  .page-preview-card { min-height: 260px; }
+  .floating-actions { right: 14px; bottom: 18px; gap: 10px; }
+  .fab { width: 60px; height: 60px; font-size: 24px; }
+  .brand-title { font-size: 24px; }
+}

@@ -57,6 +57,19 @@ function cloneCanvas(source) {
   return c;
 }
 
+
+async function normalizeImageDataUrl(dataUrl, maxSide = 1800, quality = 0.92) {
+  const img = await dataURLToImage(dataUrl);
+  const longest = Math.max(img.width, img.height);
+  if (longest <= maxSide) return dataUrl;
+  const scale = maxSide / longest;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  getContext2D(canvas).drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
 function imageStats(imageData) {
   const data = imageData.data;
   let white = 0;
@@ -193,7 +206,8 @@ function applyEnhancement(inputCanvas, options) {
 }
 
 async function processImage(dataUrl, options) {
-  const img = await dataURLToImage(dataUrl);
+  const normalizedUrl = await normalizeImageDataUrl(dataUrl);
+  const img = await dataURLToImage(normalizedUrl);
   const rotated = rotateToCanvas(img, options.rotation || 0);
   const cropped = options.autoCrop ? trimWhiteMargins(rotated) : rotated;
   const enhanced = applyEnhancement(cropped, options);
@@ -202,16 +216,26 @@ async function processImage(dataUrl, options) {
     const stats = imageStats(getContext2D(enhanced).getImageData(0, 0, enhanced.width, enhanced.height));
     if (stats.whiteRatio > 0.97 || stats.blackRatio > 0.97) {
       const safer = applyEnhancement(cropped, { ...options, mode: 'grayscale' });
-      return safer.toDataURL('image/jpeg', 0.95);
+      return { original: normalizedUrl, scanned: safer.toDataURL('image/jpeg', 0.95), fallback: 'bw-to-grayscale' };
     }
   }
 
   const safeStats = imageStats(getContext2D(enhanced).getImageData(0, 0, enhanced.width, enhanced.height));
-  if (safeStats.whiteRatio > 0.995) {
-    return rotated.toDataURL('image/jpeg', 0.95);
+  if (safeStats.whiteRatio > 0.995 || enhanced.width < 40 || enhanced.height < 40) {
+    return { original: normalizedUrl, scanned: rotated.toDataURL('image/jpeg', 0.95), fallback: 'too-white' };
   }
 
-  return enhanced.toDataURL('image/jpeg', 0.95);
+  return { original: normalizedUrl, scanned: enhanced.toDataURL('image/jpeg', 0.95), fallback: null };
+}
+
+async function processImageSafe(dataUrl, options) {
+  try {
+    return await processImage(dataUrl, options);
+  } catch (error) {
+    console.error('processImageSafe fallback', error);
+    const normalizedUrl = await normalizeImageDataUrl(dataUrl).catch(() => dataUrl);
+    return { original: normalizedUrl, scanned: normalizedUrl, fallback: 'error' };
+  }
 }
 
 function emptyDoc(name = 'Document') {
@@ -250,6 +274,7 @@ export default function App() {
   const [view, setView] = useState(() => localStorage.getItem(STORAGE_KEYS.view) || 'list');
   const [showCamera, setShowCamera] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [notice, setNotice] = useState('');
   const [ocrText, setOcrText] = useState('');
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
@@ -275,6 +300,7 @@ export default function App() {
   }, [activePageId]);
   useEffect(() => { localStorage.setItem(STORAGE_KEYS.view, view); }, [view]);
   useEffect(() => { localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings)); }, [settings]);
+  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(''), 3500); return () => clearTimeout(t); }, [notice]);
   useEffect(() => {
     if (!documents.length) {
       setActiveDocId(null);
@@ -305,25 +331,49 @@ export default function App() {
     return doc;
   }
 
+  function createDocumentWithPage(page, name = `Document ${documents.length + 1}`) {
+    const doc = { ...emptyDoc(name), pages: [page] };
+    setDocuments((prev) => [doc, ...prev]);
+    setActiveDocId(doc.id);
+    setActivePageId(page.id);
+    setView('pages');
+    return doc;
+  }
+
   function updateDocument(docId, updater) {
     setDocuments((prev) => prev.map((doc) => (doc.id === docId ? updater(doc) : doc)));
   }
 
   async function addPageToDocument(dataUrl, docId) {
-    const targetId = docId || activeDocId || createNewDocument().id;
     setProcessing(true);
     try {
-      const scanned = await processImage(dataUrl, settings);
+      const result = await processImageSafe(dataUrl, settings);
       const page = {
         id: uid(),
-        original: dataUrl,
-        scanned,
+        original: result.original,
+        scanned: result.scanned,
         createdAt: new Date().toISOString(),
       };
-      updateDocument(targetId, (doc) => ({ ...doc, pages: [...doc.pages, page] }));
-      setActiveDocId(targetId);
+
+      let resolvedDocId = docId;
+      if (docId) {
+        updateDocument(docId, (doc) => ({ ...doc, pages: [...doc.pages, page] }));
+        setActiveDocId(docId);
+      } else if (activeDocId && activeDoc?.pages?.length) {
+        resolvedDocId = activeDocId;
+        updateDocument(activeDocId, (doc) => ({ ...doc, pages: [...doc.pages, page] }));
+        setActiveDocId(activeDocId);
+      } else {
+        const created = createDocumentWithPage(page);
+        resolvedDocId = created.id;
+      }
+
       setActivePageId(page.id);
       setView('pages');
+      if (result.fallback) {
+        setNotice('Rasm xavfsiz rejimda saqlandi.');
+      }
+      return { page, docId: resolvedDocId };
     } finally {
       setProcessing(false);
     }
@@ -332,8 +382,7 @@ export default function App() {
   async function capture() {
     const shot = webcamRef.current?.getScreenshot();
     if (shot) {
-      const targetDocId = activeDocId || createNewDocument().id;
-      await addPageToDocument(shot, targetDocId);
+      await addPageToDocument(shot, activeDoc?.pages?.length ? activeDocId : null);
       setShowCamera(false);
     }
   }
@@ -341,14 +390,21 @@ export default function App() {
   async function onUpload(e) {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-    const targetDocId = activeDocId || createNewDocument().id;
+    let targetDocId = activeDoc?.pages?.length ? activeDocId : null;
     for (const file of files) {
       const reader = new FileReader();
       await new Promise((resolve) => {
         reader.onload = async () => {
-          await addPageToDocument(String(reader.result), targetDocId);
+          const outcome = await addPageToDocument(String(reader.result), targetDocId);
+          if (!targetDocId && outcome?.docId) {
+            targetDocId = outcome.docId;
+          } else if (!targetDocId && !outcome?.docId) {
+            const docsRaw = JSON.parse(localStorage.getItem(STORAGE_KEYS.docs) || '[]');
+            targetDocId = docsRaw[0]?.id || null;
+          }
           resolve();
         };
+        reader.onerror = () => { setNotice('Faylni o‘qib bo‘lmadi.'); resolve(); };
         reader.readAsDataURL(file);
       });
     }
@@ -359,11 +415,12 @@ export default function App() {
     if (!activeDoc || !activePage) return;
     setProcessing(true);
     try {
-      const scanned = await processImage(activePage.original, settings);
+      const result = await processImageSafe(activePage.original, settings);
       updateDocument(activeDoc.id, (doc) => ({
         ...doc,
-        pages: doc.pages.map((page) => (page.id === activePage.id ? { ...page, scanned } : page)),
+        pages: doc.pages.map((page) => (page.id === activePage.id ? { ...page, original: result.original, scanned: result.scanned } : page)),
       }));
+      if (result.fallback) setNotice('Rasm xavfsiz rejimda qayta ishladi.');
     } finally {
       setProcessing(false);
     }
@@ -436,6 +493,7 @@ export default function App() {
       </header>
 
       <main className="main-layout">
+        {notice && <div className="notice">{notice}</div>}
         {view === 'list' && (
           <section className="list-screen">
             <div className="section-head">
@@ -472,9 +530,9 @@ export default function App() {
             </div>
 
             <div className="floating-actions">
-              <button className="fab" onClick={() => { createNewDocument(); setShowCamera(true); }}>📷</button>
+              <button className="fab" onClick={() => { setShowCamera(true); }}>📷</button>
               <button className="fab secondary" onClick={() => uploadRef.current?.click()}>🖼️</button>
-              <button className="fab secondary" onClick={() => { const doc = createNewDocument(); setActiveDocId(doc.id); setView('pages'); }}>📄</button>
+              <button className="fab secondary" onClick={() => { const doc = createNewDocument(); setActiveDocId(doc.id); setView('pages'); setNotice('Yangi hujjat yaratildi. Endi sahifa qo‘shing.'); }}>📄</button>
             </div>
           </section>
         )}
@@ -496,7 +554,7 @@ export default function App() {
 
             <div className="pages-layout">
               <div className="page-preview-card">
-                {activePage ? <img className="page-preview" src={activePage.scanned} alt="scan" /> : <div className="empty-card">Sahifa yo‘q</div>}
+                {activePage ? <img className="page-preview" src={activePage.scanned} alt="scan" /> : <div className="empty-card"><h3>Sahifa yo‘q</h3><p>Galereya yoki kamera orqali sahifa qo‘shing.</p></div>}
                 {processing && <div className="processing-overlay">Ishlanmoqda…</div>}
               </div>
 
