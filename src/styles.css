@@ -36,12 +36,14 @@ img { display: block; }
   width: 42px;
   height: 42px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #0f172a, #3b82f6);
+  background: linear-gradient(135deg, #ffffff, #dbeafe);
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
+  overflow: hidden;
 }
+.brand-icon-image img { width: 100%; height: 100%; object-fit: cover; }
 .brand-title { font-size: 30px; line-height: 1; }
 .brand-subtitle { font-size: 12px; opacity: 0.85; margin-top: 4px; }
 .topbar-actions { display: flex; gap: 8px; }
@@ -311,4 +313,52 @@ img { display: block; }
   .floating-actions { right: 14px; bottom: 18px; gap: 10px; }
   .fab { width: 60px; height: 60px; font-size: 24px; }
   .brand-title { font-size: 24px; }
+}
+
+
+.icon-btn.dark {
+  background: rgba(15,23,42,0.08);
+  color: #0f172a;
+}
+.crop-backdrop {
+  z-index: 80;
+}
+.crop-modal {
+  width: min(820px, 100%);
+  background: #fff;
+  border-radius: 22px;
+  overflow: hidden;
+}
+.crop-hint {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+.crop-stage {
+  position: relative;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  min-height: 320px;
+}
+.crop-image {
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  user-select: none;
+}
+.crop-overlay {
+  position: absolute;
+  inset: 12px;
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  touch-action: none;
+}
+.crop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px;
 }

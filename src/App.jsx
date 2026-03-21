@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
 import { jsPDF } from 'jspdf';
 import Tesseract from 'tesseract.js';
+import CropModal from './CropModal';
 
 const STORAGE_KEYS = {
   docs: 'scanprouz_docs_v2',
@@ -238,6 +239,22 @@ async function processImageSafe(dataUrl, options) {
   }
 }
 
+
+async function cropDataUrl(dataUrl, crop) {
+  const img = await dataURLToImage(dataUrl);
+  const sx = Math.max(0, Math.floor(img.width * crop.left));
+  const sy = Math.max(0, Math.floor(img.height * crop.top));
+  const ex = Math.min(img.width, Math.ceil(img.width * crop.right));
+  const ey = Math.min(img.height, Math.ceil(img.height * crop.bottom));
+  const sw = Math.max(1, ex - sx);
+  const sh = Math.max(1, ey - sy);
+  const canvas = document.createElement('canvas');
+  canvas.width = sw;
+  canvas.height = sh;
+  getContext2D(canvas).drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  return canvas.toDataURL('image/jpeg', 0.95);
+}
+
 function emptyDoc(name = 'Document') {
   return {
     id: uid(),
@@ -273,6 +290,7 @@ export default function App() {
   const [activePageId, setActivePageId] = useState(() => localStorage.getItem(STORAGE_KEYS.activePageId) || null);
   const [view, setView] = useState(() => localStorage.getItem(STORAGE_KEYS.view) || 'list');
   const [showCamera, setShowCamera] = useState(false);
+  const [showCrop, setShowCrop] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [notice, setNotice] = useState('');
   const [ocrText, setOcrText] = useState('');
@@ -438,6 +456,31 @@ export default function App() {
     }
   }
 
+
+  function openManualCrop() {
+    if (!activePage) return;
+    setShowCrop(true);
+  }
+
+  async function applyManualCrop(crop) {
+    if (!activeDoc || !activePage) return;
+    setProcessing(true);
+    setShowCrop(false);
+    try {
+      const croppedOriginal = await cropDataUrl(activePage.original, crop);
+      const result = await processImageSafe(croppedOriginal, { ...settings, autoCrop: false });
+      updateDocument(activeDoc.id, (doc) => ({
+        ...doc,
+        pages: doc.pages.map((page) => (page.id === activePage.id
+          ? { ...page, original: result.original, scanned: result.scanned, croppedAt: new Date().toISOString() }
+          : page)),
+      }));
+      setNotice('Qo‘lda crop saqlandi.');
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   async function exportPdf(doc = activeDoc) {
     if (!doc?.pages?.length) return;
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -481,10 +524,10 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand" onClick={() => setView('list')}>
-          <div className="brand-icon">SP</div>
+          <div className="brand-icon brand-icon-image"><img src="/logo.svg" alt="ScanProUz" /></div>
           <div>
             <div className="brand-title">ScanProUz</div>
-            <div className="brand-subtitle">Scanner v2</div>
+            <div className="brand-subtitle">Scanner v4</div>
           </div>
         </div>
         <div className="topbar-actions">
@@ -499,7 +542,7 @@ export default function App() {
             <div className="section-head">
               <div>
                 <h1>Hujjatlar</h1>
-                <p>TurboScan uslubidagi ro‘yxat, xavfsiz auto-crop va PDF eksport.</p>
+                <p>TurboScan uslubidagi ro‘yxat, qo‘lda crop va xavfsiz qayta ishlash.</p>
               </div>
             </div>
 
@@ -547,7 +590,7 @@ export default function App() {
                   value={activeDoc.name}
                   onChange={(e) => updateDocument(activeDoc.id, (doc) => ({ ...doc, name: e.target.value }))}
                 />
-                <span>{activeDoc.pages.length} стр. • {formatDate(activeDoc.createdAt)}</span>
+                <span>{activeDoc.pages.length} sahifa • {formatDate(activeDoc.createdAt)}</span>
               </div>
               <button className="icon-btn" onClick={() => exportPdf(activeDoc)}>PDF</button>
             </div>
@@ -610,6 +653,7 @@ export default function App() {
 
                   <div className="tool-actions">
                     <button className="btn primary" onClick={reprocessActive} disabled={!activePage || processing}>Qayta ishlash</button>
+                    <button className="btn" onClick={openManualCrop} disabled={!activePage || processing}>Crop</button>
                     <button className="btn" onClick={() => setShowCamera(true)}>Kamera</button>
                     <button className="btn" onClick={() => uploadRef.current?.click()}>Galereya</button>
                     <button className="btn" onClick={runOCR} disabled={!activePage || ocrLoading}>{ocrLoading ? `${ocrProgress}%` : 'OCR'}</button>
@@ -662,6 +706,16 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+
+      {showCrop && activePage && (
+        <CropModal
+          imageSrc={activePage.original}
+          title="Qo‘lda crop"
+          onClose={() => setShowCrop(false)}
+          onSave={applyManualCrop}
+        />
       )}
 
       <input ref={uploadRef} className="hidden" type="file" accept="image/*" multiple onChange={onUpload} />
